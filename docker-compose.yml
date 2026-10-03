@@ -1,0 +1,196 @@
+services:
+  # =========================================================
+  # POSTGRESQL
+  # =========================================================
+  postgres:
+    image: postgres:16
+
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: Admin@123
+      POSTGRES_DB: workflow_db
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d workflow_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # =========================================================
+  # REDIS
+  # =========================================================
+  redis:
+    image: redis:7
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redisdata:/data
+
+    command: redis-server --appendonly yes
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # =========================================================
+  # FASTAPI
+  # =========================================================
+  api:
+    build: .
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+    command: >
+      sh -c "
+      alembic upgrade head &&
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /code/app
+      "
+
+    volumes:
+      - .:/code
+
+  # =========================================================
+  # DEMO DATA (runs once per persistent seed-state volume)
+  # =========================================================
+  seed-demo:
+    build: .
+
+    depends_on:
+      api:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+
+    env_file:
+      - .env
+
+    environment:
+      BASE_URL: http://api:8000
+
+    command: >
+      sh -c "
+      if [ -f /seed-state/complete ]; then
+        echo 'Demo data already seeded';
+      else
+        python scripts/seed_fake_data.py && touch /seed-state/complete;
+      fi
+      "
+
+    volumes:
+      - .:/code
+      - seedstate:/seed-state
+
+  # =========================================================
+  # NEXT.JS DEVELOPMENT SERVER
+  # =========================================================
+  frontend:
+    image: node:22-alpine
+
+    depends_on:
+      api:
+        condition: service_healthy
+
+    working_dir: /app
+
+    environment:
+      API_BASE_URL: http://api:8000
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-workflow-local-dev-only-secret-change-before-deployments}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-workflow-local-dev-only-token-key}
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_API_ORIGIN: http://localhost:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    ports:
+      - "3000:3000"
+
+    command: >
+      sh -c "npm ci && npm run dev -- --hostname 0.0.0.0"
+
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+
+  # =========================================================
+  # CELERY WORKER
+  # =========================================================
+  celery-worker:
+    build: .
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    command: >
+      watchfiles --filter python
+      "celery -A app.workers.celery_app.celery_app worker --loglevel=info"
+      /code/app
+
+    volumes:
+      - .:/code
+
+  # =========================================================
+  # CELERY BEAT
+  # =========================================================
+  celery-beat:
+    build: .
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    command: >
+      watchfiles --filter python
+      "celery -A app.workers.celery_app.celery_app beat --loglevel=info"
+      /code/app
+
+    volumes:
+      - .:/code
+
+volumes:
+  pgdata:
+  redisdata:
+  seedstate:
+  frontend_node_modules:
+  frontend_next:

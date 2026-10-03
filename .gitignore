@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+workflow.db
+*.log
+
+# Local working docs: onboarding notes + generated API references (flow.md,
+# TESTING.md, payload.json, fake_data.json, PROJECT.md). Not part of the app.
+Docs/
