@@ -5,6 +5,8 @@ __pycache__/
 venv/
 workflow.db
 *.log
+celerybeat-schedule*
+*.sqlite3
 
 # Local working docs: onboarding notes + generated API references (flow.md,
 # TESTING.md, payload.json, fake_data.json, PROJECT.md). Not part of the app.
